@@ -485,32 +485,52 @@ elif pag == "👥 Clientes e Carros":
         cli_sel  = st.selectbox("Cliente *", list(cli_opts.keys()))
         cli_id   = cli_opts[cli_sel]
 
+        st.markdown("---")
+
+        # ── Marca e Modelo FORA do form: reagem instantaneamente ──
+        col1, col2 = st.columns(2)
+        with col1:
+            marca = st.selectbox(
+                "Marca *",
+                [""] + sorted(MODELOS_POR_MARCA.keys()),
+                key="sel_marca"
+            )
+        with col2:
+            mods = MODELOS_POR_MARCA.get(marca, []) if marca else []
+            if not marca:
+                # Nenhuma marca selecionada ainda
+                st.selectbox("Modelo *", ["— selecione a marca primeiro —"],
+                             disabled=True, key="sel_modelo_vazio")
+                modelo = ""
+            elif marca == "OUTRA" or not mods:
+                # Marca sem lista → campo livre
+                modelo = st.text_input("Modelo *", placeholder="Digite o modelo",
+                                       key="modelo_livre")
+            else:
+                opcoes_mod = mods + ["✏️ Outro (digitar)"]
+                sel_mod = st.selectbox("Modelo *", [""] + opcoes_mod, key="sel_modelo")
+                if sel_mod == "✏️ Outro (digitar)":
+                    modelo = st.text_input("Digite o modelo:", key="modelo_outro")
+                else:
+                    modelo = sel_mod
+
+        # ── Placa, KM e botão salvar dentro do form ──
         with st.form("form_carro"):
             col1, col2 = st.columns(2)
             with col1:
                 placa = st.text_input("Placa *", placeholder="ABC1D23")
-                marca = st.selectbox("Marca *", [""] + sorted(MODELOS_POR_MARCA.keys()))
             with col2:
                 km = st.number_input("Quilometragem", min_value=0, step=1000)
-                mods = MODELOS_POR_MARCA.get(marca, []) if marca else []
-                if marca == "OUTRA" or not mods:
-                    modelo = st.text_input("Modelo *", placeholder="Digite o modelo")
-                else:
-                    opcoes_mod = mods + ["✏️ Outro (digitar)"]
-                    sel_mod = st.selectbox("Modelo *", [""] + opcoes_mod)
-                    if sel_mod == "✏️ Outro (digitar)":
-                        modelo = st.text_input("Digite o modelo:")
-                    else:
-                        modelo = sel_mod
 
             if st.form_submit_button("💾 Salvar Veículo", use_container_width=True):
                 if placa and marca and modelo:
                     try:
                         salvar_carro(cli_id, placa, marca, modelo.upper(), km)
                         st.success(f"✅ Veículo {placa.upper()} salvo!"); st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Placa já cadastrada!")
-                else: st.error("⚠️ Preencha placa, marca e modelo!")
+                    except Exception:
+                        st.error("❌ Placa já cadastrada!")
+                else:
+                    st.error("⚠️ Preencha placa, marca e modelo!")
 
         st.markdown("---")
         st.subheader("🚗 Veículos Cadastrados")
