@@ -1,1116 +1,763 @@
 """
-SISTEMA DE OFICINA - VERSÃO WEB COMPLETA COM AUTENTICAÇÃO
-Desenvolvido para gestão completa de oficina mecânica
+SISTEMA DE OFICINA - VERSÃO WEB COMPLETA
 """
 
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import io
 import hashlib
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 import os
 
-# ================= CONFIGURAÇÃO DA PÁGINA =================
+st.set_page_config(page_title="Sistema Oficina", page_icon="🔧",
+                   layout="wide", initial_sidebar_state="expanded")
 
-st.set_page_config(
-    page_title="Sistema Oficina",
-    page_icon="🔧",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ================= VARIÁVEIS GLOBAIS =================
-
-DB = "oficina.db"
+DB        = "oficina.db"
 LOGO_PATH = "logo.png"
 
 MODELOS_POR_MARCA = {
-    "FIAT": ["PALIO", "UNO", "STRADA", "ARGO", "TORO"],
-    "FORD": ["KA", "FIESTA", "FOCUS", "ECOSPORT"],
-    "VW": ["GOL", "POLO", "SAVEIRO", "T-CROSS"],
-    "GM": ["CORSA", "CELTA", "ONIX", "PRISMA"],
-    "TOYOTA": ["COROLLA", "ETIOS", "HILUX"],
-    "HONDA": ["CIVIC", "FIT", "CITY", "HR-V"]
+    "CHEVROLET":  ["AGILE","ASTRA","BLAZER","CELTA","COBALT","CRUZE","EQUINOX","KADETT","MERIVA",
+                   "MONTANA","ONIX","ONIX PLUS","PRISMA","S10","SPIN","TRACKER","TRAILBLAZER","VECTRA","ZAFIRA"],
+    "FIAT":       ["ARGO","BRAVO","CRONOS","DOBLO","DUCATO","FIORINO","GRAND SIENA","IDEA","LINEA",
+                   "MAREA","MOBI","PALIO","PALIO WEEKEND","PUNTO","SIENA","STRADA","TORO","UNO"],
+    "FORD":       ["BRONCO","COURIER","ECOSPORT","EDGE","ESCORT","F-150","F-250","FIESTA","FLEX",
+                   "FOCUS","FUSION","KA","KA+","MAVERICK","MUSTANG","RANGER","TERRITORY"],
+    "HONDA":      ["ACCORD","CITY","CIVIC","CR-V","FIT","HR-V","WR-V"],
+    "HYUNDAI":    ["AZERA","CRETA","ELANTRA","HB20","HB20S","HB20X","IX35","SANTA FE","TUCSON","VELOSTER"],
+    "JEEP":       ["COMMANDER","COMPASS","GLADIATOR","GRAND CHEROKEE","RENEGADE","WRANGLER"],
+    "KIA":        ["CADENZA","CARNIVAL","CERATO","NIRO","OPTIMA","PICANTO","SOUL","SPORTAGE","STINGER","STONIC"],
+    "MERCEDES":   ["A 200","C 180","C 200","C 300","CLA 200","E 200","GLA 200","GLC 250","SPRINTER"],
+    "MITSUBISHI": ["ASX","ECLIPSE CROSS","L200","LANCER","OUTLANDER","PAJERO","PAJERO SPORT"],
+    "NISSAN":     ["FRONTIER","KICKS","LEAF","LIVINA","MARCH","SENTRA","TIIDA","VERSA","X-TRAIL"],
+    "PEUGEOT":    ["2008","207","208","3008","308","408","5008","BOXER","EXPERT","PARTNER"],
+    "RENAULT":    ["CAPTUR","CLIO","DUSTER","FLUENCE","KARDIAN","KWID","LOGAN","OROCH","SANDERO","STEPWAY"],
+    "TOYOTA":     ["CAMRY","COROLLA","COROLLA CROSS","ETIOS","HILUX","LAND CRUISER","PRIUS","RAV4","SW4","YARIS"],
+    "VW":         ["AMAROK","ARTEON","BORA","CROSSFOX","FOX","FUSCA","GOL","GOLF","JETTA","KOMBI",
+                   "NIVUS","PASSAT","POLO","SAVEIRO","T-CROSS","TAOS","TIGUAN","TOUAREG","UP","VIRTUS","VOYAGE"],
+    "BMW":        ["116i","118i","120i","125i","218i","220i","320i","328i","330i","520i","X1","X3","X5","X6"],
+    "AUDI":       ["A1","A3","A4","A5","A6","A7","Q2","Q3","Q5","Q7","TT"],
+    "OUTRA":      [],
 }
 
-# ================= SISTEMA DE AUTENTICAÇÃO =================
+TODOS_MENUS = ["🏠 Dashboard","👥 Clientes e Carros","💰 Orçamentos",
+               "📜 Histórico","✅ Serviços Realizados","📚 Catálogo",
+               "🔑 Alterar Senha","👤 Usuários"]
 
-def hash_password(password):
-    """Cria hash da senha"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def init_usuarios():
-    """Inicializa tabela de usuários"""
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT,
-            nome TEXT,
-            nivel TEXT
-        )
-    """)
-    
-    # Criar usuário admin padrão se não existir
-    c.execute("SELECT * FROM usuarios WHERE username='admin'")
-    if not c.fetchone():
-        senha_hash = hash_password("admin123")
-        c.execute("""
-            INSERT INTO usuarios (username, password, nome, nivel)
-            VALUES ('admin', ?, 'Administrador', 'admin')
-        """, (senha_hash,))
-    
-    conn.commit()
-    conn.close()
-
-def verificar_login(username, password):
-    """Verifica credenciais do usuário"""
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    
-    senha_hash = hash_password(password)
-    c.execute("""
-        SELECT id, nome, nivel FROM usuarios 
-        WHERE username=? AND password=?
-    """, (username, senha_hash))
-    
-    resultado = c.fetchone()
-    conn.close()
-    
-    return resultado
-
-def alterar_senha(user_id, senha_atual, nova_senha):
-    """Altera a senha do usuário"""
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    # Verificar senha atual
-    senha_hash_atual = hash_password(senha_atual)
-    c.execute("SELECT id FROM usuarios WHERE id=? AND password=?",
-              (user_id, senha_hash_atual))
-
-    if not c.fetchone():
-        conn.close()
-        return False, "Senha atual incorreta!"
-
-    # Atualizar para nova senha
-    nova_hash = hash_password(nova_senha)
-    c.execute("UPDATE usuarios SET password=? WHERE id=?",
-              (nova_hash, user_id))
-    conn.commit()
-    conn.close()
-    return True, "Senha alterada com sucesso!"
-
-def tela_login():
-    """Tela de login"""
-    st.markdown("""
-        <style>
-        .login-container {
-            max-width: 400px;
-            margin: 100px auto;
-            padding: 2rem;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, use_container_width=True)
-        
-        st.title("🔧 Sistema Oficina")
-        st.markdown("---")
-        
-        with st.form("login_form"):
-            username = st.text_input("👤 Usuário", placeholder="Digite seu usuário")
-            password = st.text_input("🔒 Senha", type="password", placeholder="Digite sua senha")
-            
-            submit = st.form_submit_button("🚀 Entrar", use_container_width=True)
-            
-            if submit:
-                if username and password:
-                    resultado = verificar_login(username, password)
-                    
-                    if resultado:
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = resultado[0]
-                        st.session_state.user_nome = resultado[1]
-                        st.session_state.user_nivel = resultado[2]
-                        st.rerun()
-                    else:
-                        st.error("❌ Usuário ou senha incorretos!")
-                else:
-                    st.warning("⚠️ Preencha todos os campos!")
-        
-        st.markdown("---")
-        st.caption("💡 Usuário padrão: **admin** | Senha: **admin123**")
-        st.caption("📝 Altere a senha após primeiro acesso!")
-
-# ================= CSS CUSTOMIZADO =================
-
-def load_css():
-    st.markdown("""
-    <style>
-        [data-testid="stSidebar"] {
-            background-color: #1a2634;
-        }
-        [data-testid="stSidebar"] p,
-        [data-testid="stSidebar"] span,
-        [data-testid="stSidebar"] label,
-        [data-testid="stSidebar"] div,
-        [data-testid="stSidebar"] small {
-            color: #f0f4f8 !important;
-        }
-        [data-testid="stSidebar"] h1,
-        [data-testid="stSidebar"] h2,
-        [data-testid="stSidebar"] h3 {
-            color: #ffffff !important;
-        }
-        [data-testid="stSidebar"] hr {
-            border-color: #2d3f53 !important;
-        }
-        [data-testid="stSidebar"] .stButton > button {
-            background-color: #c0392b !important;
-            color: #ffffff !important;
-            border: none !important;
-            border-radius: 6px !important;
-            font-weight: bold !important;
-            width: 100%;
-        }
-        [data-testid="stSidebar"] .stButton > button:hover {
-            background-color: #a93226 !important;
-        }
-        .main { padding: 1rem; }
-        h1 {
-            color: #1f77b4;
-            padding-bottom: 0.5rem;
-            border-bottom: 3px solid #1f77b4;
-            margin-bottom: 1.5rem;
-        }
-        h2 { color: #2c3e50; margin-top: 1.5rem; }
-        .main .stButton > button {
-            background-color: #1f77b4;
-            color: white;
-            border-radius: 6px;
-            font-weight: bold;
-            border: none;
-        }
-        .main .stButton > button:hover {
-            background-color: #155a8a;
-        }
-        [data-testid="stMetric"] {
-            background-color: #f7f9fc;
-            border-radius: 10px;
-            padding: 1rem;
-            border: 1px solid #e2e8f0;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-# ================= BANCO DE DADOS =================
+# ═══════════════════════════ BANCO ═══════════════════════════
 
 def init_db():
-    """Inicializa o banco de dados"""
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-
-    c.execute("""
+    c.executescript("""
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT,
-            telefone TEXT,
-            logradouro TEXT,
-            numero TEXT
-        )
-    """)
-
-    c.execute("""
+            nome TEXT, telefone TEXT, logradouro TEXT, numero TEXT);
         CREATE TABLE IF NOT EXISTS carros (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente_id INTEGER,
-            placa TEXT UNIQUE,
-            marca TEXT,
-            modelo TEXT,
-            km INTEGER
-        )
-    """)
-
-    c.execute("""
+            cliente_id INTEGER, placa TEXT UNIQUE,
+            marca TEXT, modelo TEXT, km INTEGER);
         CREATE TABLE IF NOT EXISTS catalogo_servicos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            descricao TEXT,
-            valor REAL
-        )
-    """)
-
-    c.execute("""
+            descricao TEXT, valor REAL);
         CREATE TABLE IF NOT EXISTS orcamentos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente_id INTEGER,
-            carro_id INTEGER,
-            data TEXT,
-            status TEXT,
-            total REAL,
-            observacoes TEXT
-        )
-    """)
-
-    c.execute("""
+            cliente_id INTEGER, carro_id INTEGER,
+            data TEXT, status TEXT, total REAL, observacoes TEXT);
         CREATE TABLE IF NOT EXISTS itens_orcamento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            orcamento_id INTEGER,
-            servico_id INTEGER,
-            descricao TEXT,
-            quantidade INTEGER,
-            valor_unitario REAL,
-            subtotal REAL
-        )
-    """)
-
-    c.execute("""
+            orcamento_id INTEGER, servico_id INTEGER,
+            descricao TEXT, quantidade INTEGER,
+            valor_unitario REAL, subtotal REAL);
         CREATE TABLE IF NOT EXISTS servicos_realizados (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            orcamento_id INTEGER,
-            cliente_id INTEGER,
-            carro_id INTEGER,
-            data TEXT,
-            total REAL,
-            observacoes TEXT
-        )
-    """)
-
-    c.execute("""
+            orcamento_id INTEGER, cliente_id INTEGER, carro_id INTEGER,
+            data TEXT, total REAL, observacoes TEXT);
         CREATE TABLE IF NOT EXISTS itens_servico (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            servico_id INTEGER,
-            descricao TEXT,
-            quantidade INTEGER,
-            valor_unitario REAL,
-            subtotal REAL
-        )
+            servico_id INTEGER, descricao TEXT,
+            quantidade INTEGER, valor_unitario REAL, subtotal REAL);
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE, password TEXT,
+            nome TEXT, nivel TEXT, menus_permitidos TEXT);
     """)
+    c.execute("SELECT id FROM usuarios WHERE username='admin'")
+    if not c.fetchone():
+        c.execute("""INSERT INTO usuarios(username,password,nome,nivel,menus_permitidos)
+                     VALUES('admin',?,  'Administrador','admin',?)""",
+                  (hashlib.sha256("admin123".encode()).hexdigest(), ",".join(TODOS_MENUS)))
+    conn.commit(); conn.close()
 
-    conn.commit()
-    conn.close()
+def get_conn(): return sqlite3.connect(DB)
 
-# ================= FUNÇÕES AUXILIARES =================
+# ═══════════════════════════ AUTENTICAÇÃO ═══════════════════════════
 
-def formatar_moeda(valor):
-    """Formata valor para moeda brasileira"""
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+def hash_pw(p): return hashlib.sha256(p.encode()).hexdigest()
 
-def formatar_telefone(telefone):
-    """Formata telefone brasileiro"""
-    if not telefone:
-        return ""
-    nums = "".join(filter(str.isdigit, telefone))
-    if len(nums) == 11:
-        return f"({nums[:2]}) {nums[2:7]}-{nums[7:]}"
-    return telefone
+def verificar_login(username, password):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("SELECT id,nome,nivel,menus_permitidos FROM usuarios WHERE username=? AND password=?",
+              (username, hash_pw(password)))
+    r = c.fetchone(); conn.close(); return r
 
-def get_db_connection():
-    """Retorna conexão com o banco"""
-    return sqlite3.connect(DB)
+def alterar_senha(user_id, atual, nova):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("SELECT id FROM usuarios WHERE id=? AND password=?", (user_id, hash_pw(atual)))
+    if not c.fetchone():
+        conn.close(); return False, "Senha atual incorreta!"
+    c.execute("UPDATE usuarios SET password=? WHERE id=?", (hash_pw(nova), user_id))
+    conn.commit(); conn.close(); return True, "Senha alterada com sucesso!"
 
-# ================= FUNÇÕES DE DADOS =================
+def tela_login():
+    _, col, _ = st.columns([1,2,1])
+    with col:
+        if os.path.exists(LOGO_PATH): st.image(LOGO_PATH, use_container_width=True)
+        st.title("🔧 Sistema Oficina")
+        st.markdown("---")
+        with st.form("login_form"):
+            username = st.text_input("👤 Usuário")
+            password = st.text_input("🔒 Senha", type="password")
+            if st.form_submit_button("🚀 Entrar", use_container_width=True):
+                if username and password:
+                    r = verificar_login(username, password)
+                    if r:
+                        st.session_state.update(logged_in=True, user_id=r[0],
+                            user_nome=r[1], user_nivel=r[2],
+                            menus_permitidos=(r[3] or "").split(","))
+                        st.rerun()
+                    else: st.error("❌ Usuário ou senha incorretos!")
+                else: st.warning("⚠️ Preencha todos os campos!")
+        st.caption("💡 Padrão: admin / admin123")
+
+# ═══════════════════════════ CSS ═══════════════════════════
+
+def load_css():
+    st.markdown("""<style>
+    [data-testid="stSidebar"]           {background-color:#1a2634;}
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] div,
+    [data-testid="stSidebar"] small     {color:#f0f4f8 !important;}
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3        {color:#fff !important;}
+    [data-testid="stSidebar"] hr        {border-color:#2d3f53 !important;}
+    [data-testid="stSidebar"] .stButton>button{
+        background:#c0392b!important;color:#fff!important;
+        border:none!important;border-radius:6px!important;
+        font-weight:bold!important;width:100%;}
+    [data-testid="stSidebar"] .stButton>button:hover{background:#a93226!important;}
+    .main{padding:1rem;}
+    h1{color:#1f77b4;padding-bottom:.5rem;border-bottom:3px solid #1f77b4;margin-bottom:1.5rem;}
+    h2{color:#2c3e50;margin-top:1.5rem;}
+    .main .stButton>button{background:#1f77b4;color:white;border-radius:6px;font-weight:bold;border:none;}
+    .main .stButton>button:hover{background:#155a8a;}
+    [data-testid="stMetric"]{background:#f7f9fc;border-radius:10px;padding:1rem;border:1px solid #e2e8f0;}
+    </style>""", unsafe_allow_html=True)
+
+# ═══════════════════════════ HELPERS ═══════════════════════════
+
+def fmt_moeda(v):
+    return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+
+def fmt_km(v):
+    try: return f"{int(v):,} km".replace(",",".")
+    except: return str(v)
+
+def agora_br(): return datetime.now().strftime("%d/%m/%Y %H:%M")
+
+# ═══════════════════════════ DADOS — CLIENTES ═══════════════════════════
 
 def get_clientes():
-    """Retorna todos os clientes"""
-    conn = get_db_connection()
+    conn = get_conn()
     df = pd.read_sql_query("SELECT * FROM clientes ORDER BY nome", conn)
-    conn.close()
-    return df
+    conn.close(); return df
 
-def salvar_cliente(nome, telefone, logradouro, numero, cliente_id=None):
-    """Salva ou atualiza cliente"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    if cliente_id:
-        c.execute("""
-            UPDATE clientes 
-            SET nome=?, telefone=?, logradouro=?, numero=?
-            WHERE id=?
-        """, (nome, telefone, logradouro, numero, cliente_id))
+def salvar_cliente(nome, telefone, logradouro, numero, cid=None):
+    conn = get_conn(); c = conn.cursor()
+    if cid:
+        c.execute("UPDATE clientes SET nome=?,telefone=?,logradouro=?,numero=? WHERE id=?",
+                  (nome, telefone, logradouro, numero, cid))
     else:
-        c.execute("""
-            INSERT INTO clientes (nome, telefone, logradouro, numero)
-            VALUES (?, ?, ?, ?)
-        """, (nome, telefone, logradouro, numero))
-    
-    conn.commit()
-    novo_id = c.lastrowid if not cliente_id else cliente_id
-    conn.close()
-    return novo_id
+        c.execute("INSERT INTO clientes(nome,telefone,logradouro,numero) VALUES(?,?,?,?)",
+                  (nome, telefone, logradouro, numero))
+    conn.commit(); conn.close()
 
-def get_carros_por_cliente(cliente_id):
-    """Retorna carros de um cliente"""
-    conn = get_db_connection()
-    df = pd.read_sql_query(
-        "SELECT * FROM carros WHERE cliente_id = ? ORDER BY placa",
-        conn,
-        params=(cliente_id,)
-    )
+def pode_excluir_cliente(cid):
+    conn = get_conn(); c = conn.cursor()
+    carros = c.execute("SELECT COUNT(*) FROM carros WHERE cliente_id=?", (cid,)).fetchone()[0]
+    orc    = c.execute("SELECT COUNT(*) FROM orcamentos WHERE cliente_id=?", (cid,)).fetchone()[0]
+    serv   = c.execute("SELECT COUNT(*) FROM servicos_realizados WHERE cliente_id=?", (cid,)).fetchone()[0]
     conn.close()
-    return df
+    if carros: return False, f"possui {carros} veículo(s) cadastrado(s)"
+    if orc:    return False, f"possui {orc} orçamento(s) cadastrado(s)"
+    if serv:   return False, f"possui {serv} serviço(s) realizado(s)"
+    return True, ""
+
+def excluir_cliente(cid):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("DELETE FROM clientes WHERE id=?", (cid,))
+    conn.commit(); conn.close()
+
+# ═══════════════════════════ DADOS — CARROS ═══════════════════════════
+
+def get_carros_por_cliente(cid):
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM carros WHERE cliente_id=? ORDER BY placa", conn, params=(cid,))
+    conn.close(); return df
 
 def salvar_carro(cliente_id, placa, marca, modelo, km, carro_id=None):
-    """Salva ou atualiza carro"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
+    conn = get_conn(); c = conn.cursor()
     if carro_id:
-        c.execute("""
-            UPDATE carros
-            SET placa=?, marca=?, modelo=?, km=?
-            WHERE id=?
-        """, (placa.upper(), marca, modelo, km, carro_id))
+        c.execute("UPDATE carros SET placa=?,marca=?,modelo=?,km=? WHERE id=?",
+                  (placa.upper(), marca, modelo, int(km), carro_id))
     else:
-        c.execute("""
-            INSERT INTO carros (cliente_id, placa, marca, modelo, km)
-            VALUES (?, ?, ?, ?, ?)
-        """, (cliente_id, placa.upper(), marca, modelo, km))
-    
-    conn.commit()
-    novo_id = c.lastrowid if not carro_id else carro_id
-    conn.close()
-    return novo_id
+        c.execute("INSERT INTO carros(cliente_id,placa,marca,modelo,km) VALUES(?,?,?,?,?)",
+                  (cliente_id, placa.upper(), marca, modelo, int(km)))
+    conn.commit(); conn.close()
+
+# ═══════════════════════════ DADOS — SERVIÇOS ═══════════════════════════
 
 def get_servicos():
-    """Retorna todos os serviços do catálogo"""
-    conn = get_db_connection()
+    conn = get_conn()
     df = pd.read_sql_query("SELECT * FROM catalogo_servicos ORDER BY descricao", conn)
-    conn.close()
-    return df
+    conn.close(); return df
 
-def salvar_servico(descricao, valor, servico_id=None):
-    """Salva ou atualiza serviço"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    if servico_id:
-        c.execute("""
-            UPDATE catalogo_servicos
-            SET descricao=?, valor=?
-            WHERE id=?
-        """, (descricao.upper(), valor, servico_id))
+def salvar_servico(descricao, valor, sid=None):
+    conn = get_conn(); c = conn.cursor()
+    if sid:
+        c.execute("UPDATE catalogo_servicos SET descricao=?,valor=? WHERE id=?",
+                  (descricao.upper(), valor, sid))
     else:
-        c.execute("""
-            INSERT INTO catalogo_servicos (descricao, valor)
-            VALUES (?, ?)
-        """, (descricao.upper(), valor))
-    
-    conn.commit()
-    novo_id = c.lastrowid if not servico_id else servico_id
-    conn.close()
-    return novo_id
+        c.execute("INSERT INTO catalogo_servicos(descricao,valor) VALUES(?,?)",
+                  (descricao.upper(), valor))
+    conn.commit(); conn.close()
 
 def salvar_orcamento(cliente_id, carro_id, status, observacoes, itens):
-    """Salva orçamento completo"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    data = datetime.now().strftime("%d/%m/%Y %H:%M")
-    total = sum(item['subtotal'] for item in itens)
-    
-    c.execute("""
-        INSERT INTO orcamentos (cliente_id, carro_id, data, status, total, observacoes)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (cliente_id, carro_id, data, status, total, observacoes))
-    
-    orcamento_id = c.lastrowid
-    
-    for item in itens:
-        c.execute("""
-            INSERT INTO itens_orcamento 
-            (orcamento_id, servico_id, descricao, quantidade, valor_unitario, subtotal)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (orcamento_id, item['servico_id'], item['descricao'], 
-              item['quantidade'], item['valor_unitario'], item['subtotal']))
-    
-    # Se aprovado, criar serviço realizado
+    conn = get_conn(); c = conn.cursor()
+    data  = agora_br()
+    total = sum(i['subtotal'] for i in itens)
+    c.execute("INSERT INTO orcamentos(cliente_id,carro_id,data,status,total,observacoes) VALUES(?,?,?,?,?,?)",
+              (cliente_id, carro_id, data, status, total, observacoes))
+    oid = c.lastrowid
+    for i in itens:
+        c.execute("""INSERT INTO itens_orcamento(orcamento_id,servico_id,descricao,
+                     quantidade,valor_unitario,subtotal) VALUES(?,?,?,?,?,?)""",
+                  (oid, i['servico_id'], i['descricao'], i['quantidade'],
+                   i['valor_unitario'], i['subtotal']))
     if status == 'APROVADO':
-        criar_servico_de_orcamento(c, orcamento_id, cliente_id, carro_id, data, total, observacoes, itens)
-    
-    conn.commit()
-    conn.close()
-    return orcamento_id
-
-def criar_servico_de_orcamento(cursor, orc_id, cliente_id, carro_id, data, total, obs, itens):
-    """Cria um serviço realizado a partir de um orçamento aprovado"""
-    cursor.execute("""
-        INSERT INTO servicos_realizados (orcamento_id, cliente_id, carro_id, data, total, observacoes)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (orc_id, cliente_id, carro_id, data, total, obs))
-    servico_id = cursor.lastrowid
-    
-    for item in itens:
-        cursor.execute("""
-            INSERT INTO itens_servico (servico_id, descricao, quantidade, valor_unitario, subtotal)
-            VALUES (?, ?, ?, ?, ?)
-        """, (servico_id, item['descricao'], item['quantidade'], item['valor_unitario'], item['subtotal']))
+        c.execute("INSERT INTO servicos_realizados(orcamento_id,cliente_id,carro_id,data,total,observacoes) VALUES(?,?,?,?,?,?)",
+                  (oid, cliente_id, carro_id, data, total, observacoes))
+        sid2 = c.lastrowid
+        for i in itens:
+            c.execute("INSERT INTO itens_servico(servico_id,descricao,quantidade,valor_unitario,subtotal) VALUES(?,?,?,?,?)",
+                      (sid2, i['descricao'], i['quantidade'], i['valor_unitario'], i['subtotal']))
+    conn.commit(); conn.close(); return oid
 
 def get_orcamentos():
-    """Retorna todos os orçamentos"""
-    conn = get_db_connection()
-    query = """
-        SELECT o.id, c.nome, ca.placa, o.data, o.status, o.total
+    conn = get_conn()
+    df = pd.read_sql_query("""
+        SELECT o.id,c.nome,ca.placa,o.data,o.status,o.total
         FROM orcamentos o
-        JOIN clientes c ON o.cliente_id = c.id
-        JOIN carros ca ON o.carro_id = ca.id
-        ORDER BY o.id DESC
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
+        JOIN clientes c ON o.cliente_id=c.id
+        JOIN carros ca  ON o.carro_id=ca.id
+        ORDER BY o.id DESC""", conn)
+    conn.close(); return df
 
 def get_servicos_realizados(data_ini=None, data_fim=None):
-    """Retorna serviços realizados com filtro opcional de data"""
-    conn = get_db_connection()
-    
-    query = """
-        SELECT s.id, c.nome, ca.placa, s.data, s.total
-        FROM servicos_realizados s
-        JOIN clientes c ON s.cliente_id = c.id
-        JOIN carros ca ON s.carro_id = ca.id
-    """
-    
+    conn = get_conn()
+    q = """SELECT s.id,c.nome,ca.placa,s.data,s.total
+           FROM servicos_realizados s
+           JOIN clientes c ON s.cliente_id=c.id
+           JOIN carros ca  ON s.carro_id=ca.id"""
     params = []
     if data_ini and data_fim:
-        query += " WHERE s.data BETWEEN ? AND ?"
+        q += " WHERE s.data >= ? AND s.data <= ?"
         params = [data_ini, data_fim + " 23:59"]
-    
-    query += " ORDER BY s.id DESC"
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    return df
+    q += " ORDER BY s.id DESC"
+    df = pd.read_sql_query(q, conn, params=params)
+    conn.close(); return df
 
-def gerar_pdf_orcamento(orcamento_id):
-    """Gera PDF do orçamento"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    # Dados do orçamento
-    c.execute("""
-        SELECT o.id, c.nome, c.telefone, c.logradouro, c.numero,
-               ca.placa, ca.marca, ca.modelo, ca.km,
-               o.data, o.status, o.total, o.observacoes
-        FROM orcamentos o
-        JOIN clientes c ON o.cliente_id = c.id
-        JOIN carros ca ON o.carro_id = ca.id
-        WHERE o.id=?
-    """, (orcamento_id,))
+def gerar_pdf_orcamento(oid):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("""SELECT o.id,c.nome,c.telefone,c.logradouro,c.numero,
+                        ca.placa,ca.marca,ca.modelo,ca.km,
+                        o.data,o.status,o.total,o.observacoes
+                 FROM orcamentos o
+                 JOIN clientes c ON o.cliente_id=c.id
+                 JOIN carros ca  ON o.carro_id=ca.id
+                 WHERE o.id=?""", (oid,))
     orc = c.fetchone()
-    
-    # Itens
-    c.execute("""
-        SELECT descricao, quantidade, valor_unitario, subtotal
-        FROM itens_orcamento WHERE orcamento_id=?
-    """, (orcamento_id,))
-    itens = c.fetchall()
-    
-    conn.close()
-    
-    # Criar PDF em memória
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elementos = []
+    c.execute("SELECT descricao,quantidade,valor_unitario,subtotal FROM itens_orcamento WHERE orcamento_id=?", (oid,))
+    itens = c.fetchall(); conn.close()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
     styles = getSampleStyleSheet()
-    
-    # Título
-    style_titulo = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#1a1a1a'),
-        spaceAfter=30,
-        alignment=TA_CENTER
-    )
-    
-    titulo = Paragraph(f"ORÇAMENTO Nº {orc[0]:04d}", style_titulo)
-    elementos.append(titulo)
-    elementos.append(Spacer(1, 12))
-    
-    # Informações do cliente
-    info_data = [
-        ['Data:', orc[9], 'Status:', orc[10]],
-        ['Cliente:', orc[1], '', ''],
-        ['Telefone:', orc[2] or 'Não informado', '', ''],
-        ['Endereço:', f"{orc[3] or ''} {orc[4] or ''}", '', ''],
-        ['Veículo:', f"{orc[6]} {orc[7]}", 'Placa:', orc[5]],
-        ['KM:', str(orc[8]), '', ''],
-    ]
-    
-    info_table = Table(info_data, colWidths=[1.5*inch, 2.5*inch, 1*inch, 1.5*inch])
-    info_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-    ]))
-    elementos.append(info_table)
-    elementos.append(Spacer(1, 20))
-    
-    # Tabela de serviços
-    servicos_data = [['Descrição', 'Qtd', 'Valor Unit.', 'Subtotal']]
-    
-    for item in itens:
-        servicos_data.append([
-            item[0],
-            str(item[1]),
-            f"R$ {item[2]:.2f}",
-            f"R$ {item[3]:.2f}"
-        ])
-    
-    servicos_table = Table(servicos_data, colWidths=[3.5*inch, 0.7*inch, 1.2*inch, 1.2*inch])
-    servicos_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-    ]))
-    elementos.append(servicos_table)
-    elementos.append(Spacer(1, 12))
-    
-    # Total
-    total_data = [['', '', 'TOTAL:', f"R$ {orc[11]:.2f}"]]
-    total_table = Table(total_data, colWidths=[3.5*inch, 0.7*inch, 1.2*inch, 1.2*inch])
-    total_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 14),
-        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
-    ]))
-    elementos.append(total_table)
-    
-    doc.build(elementos)
-    buffer.seek(0)
-    return buffer
+    st_t = ParagraphStyle('T',parent=styles['Heading1'],fontSize=18,
+                          textColor=colors.HexColor('#1a1a1a'),spaceAfter=20,alignment=TA_CENTER)
+    elems = [Paragraph(f"ORÇAMENTO Nº {orc[0]:04d}", st_t), Spacer(1,10)]
+    info = [['Data:',orc[9],'Status:',orc[10]],
+            ['Cliente:',orc[1],'',''],
+            ['Telefone:',orc[2] or '—','',''],
+            ['Endereço:',f"{orc[3] or ''} {orc[4] or ''}".strip(),'',''],
+            ['Veículo:',f"{orc[6]} {orc[7]}",'Placa:',orc[5]],
+            ['KM:',fmt_km(orc[8]),'','']]
+    t = Table(info, colWidths=[1.5*inch,2.5*inch,1*inch,1.5*inch])
+    t.setStyle(TableStyle([('FONTNAME',(0,0),(-1,-1),'Helvetica'),
+                            ('FONTSIZE',(0,0),(-1,-1),10),
+                            ('GRID',(0,0),(-1,-1),.5,colors.grey)]))
+    elems += [t, Spacer(1,14)]
+    rows = [['Descrição','Qtd','Valor Unit.','Subtotal']]
+    for i in itens:
+        rows.append([i[0],str(i[1]),f"R$ {i[2]:.2f}",f"R$ {i[3]:.2f}"])
+    st2 = Table(rows, colWidths=[3.5*inch,.7*inch,1.2*inch,1.2*inch])
+    st2.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#2c3e50')),
+                              ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+                              ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                              ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                              ('GRID',(0,0),(-1,-1),1,colors.black)]))
+    elems += [st2, Spacer(1,10)]
+    tot = Table([['','','TOTAL:',f"R$ {orc[11]:.2f}"]],
+                colWidths=[3.5*inch,.7*inch,1.2*inch,1.2*inch])
+    tot.setStyle(TableStyle([('FONTNAME',(0,0),(-1,-1),'Helvetica-Bold'),
+                              ('FONTSIZE',(0,0),(-1,-1),13),
+                              ('ALIGN',(2,0),(-1,-1),'RIGHT')]))
+    elems.append(tot)
+    doc.build(elems); buf.seek(0); return buf
 
-# ================= INICIALIZAÇÃO =================
+# ═══════════════════════════ DADOS — USUÁRIOS ═══════════════════════════
+
+def get_usuarios():
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT id,username,nome,nivel,menus_permitidos FROM usuarios ORDER BY nome", conn)
+    conn.close(); return df
+
+def salvar_usuario(username, nome, nivel, menus, uid=None, senha=None):
+    conn = get_conn(); c = conn.cursor()
+    menus_str = ",".join(menus)
+    try:
+        if uid:
+            if senha:
+                c.execute("UPDATE usuarios SET username=?,nome=?,nivel=?,menus_permitidos=?,password=? WHERE id=?",
+                          (username, nome, nivel, menus_str, hash_pw(senha), uid))
+            else:
+                c.execute("UPDATE usuarios SET username=?,nome=?,nivel=?,menus_permitidos=? WHERE id=?",
+                          (username, nome, nivel, menus_str, uid))
+        else:
+            if not senha: conn.close(); return False, "Informe a senha para novo usuário!"
+            c.execute("INSERT INTO usuarios(username,nome,nivel,menus_permitidos,password) VALUES(?,?,?,?,?)",
+                      (username, nome, nivel, menus_str, hash_pw(senha)))
+        conn.commit(); conn.close(); return True, "Usuário salvo!"
+    except sqlite3.IntegrityError:
+        conn.close(); return False, "Login já existe!"
+
+def excluir_usuario(uid):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("DELETE FROM usuarios WHERE id=?", (uid,))
+    conn.commit(); conn.close()
+
+# ═══════════════════════════ INICIALIZAÇÃO ═══════════════════════════
 
 init_db()
-init_usuarios()
-
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'pagina' not in st.session_state:
-    st.session_state.pagina = '🏠 Dashboard'
-if 'itens_orcamento' not in st.session_state:
-    st.session_state.itens_orcamento = []
-
-# ================= VERIFICAR LOGIN =================
+for k, v in [("logged_in",False),("pagina","🏠 Dashboard"),
+             ("itens_orcamento",[]),("menus_permitidos",TODOS_MENUS)]:
+    if k not in st.session_state: st.session_state[k] = v
 
 if not st.session_state.logged_in:
-    tela_login()
-    st.stop()
-
-# ================= APLICAÇÃO PRINCIPAL =================
+    tela_login(); st.stop()
 
 load_css()
 
-# ================= SIDEBAR =================
+# ═══════════════════════════ SIDEBAR ═══════════════════════════
+
+menus_user = [m for m in TODOS_MENUS if m in st.session_state.menus_permitidos]
 
 with st.sidebar:
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, use_container_width=True)
-    else:
-        st.title("🔧 Oficina")
-    
+    if os.path.exists(LOGO_PATH): st.image(LOGO_PATH, use_container_width=True)
+    else: st.title("🔧 Oficina")
     st.markdown("---")
     st.write(f"👤 **{st.session_state.user_nome}**")
-    
     if st.button("🚪 Sair", use_container_width=True):
-        st.session_state.logged_in = False
-        st.rerun()
-    
+        st.session_state.logged_in = False; st.rerun()
     st.markdown("---")
-    
-    st.session_state.pagina = st.radio(
-        "📋 Menu Principal",
-        ["🏠 Dashboard", "👥 Clientes e Carros", "💰 Orçamentos",
-         "📜 Histórico", "✅ Serviços Realizados", "📚 Catálogo",
-         "🔑 Alterar Senha"]
-    )
-    
+    if st.session_state.pagina not in menus_user:
+        st.session_state.pagina = menus_user[0]
+    st.session_state.pagina = st.radio("📋 Menu", menus_user)
     st.markdown("---")
     st.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
-# ================= PÁGINA: DASHBOARD =================
+pag = st.session_state.pagina
 
-if st.session_state.pagina == "🏠 Dashboard":
+# ═══════════════════════════ DASHBOARD ═══════════════════════════
+
+if pag == "🏠 Dashboard":
     st.title("🏠 Dashboard")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    total_clientes = c.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
-    total_carros = c.execute("SELECT COUNT(*) FROM carros").fetchone()[0]
-    total_servicos_mes = c.execute("""
-        SELECT COUNT(*) FROM servicos_realizados 
-        WHERE strftime('%Y-%m', data) = strftime('%Y-%m', 'now')
-    """).fetchone()[0]
-    
-    faturamento_mes = c.execute("""
-        SELECT COALESCE(SUM(total), 0) FROM servicos_realizados 
-        WHERE strftime('%Y-%m', data) = strftime('%Y-%m', 'now')
-    """).fetchone()[0]
-    
+    conn = get_conn(); c = conn.cursor()
+    tot_cli  = c.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
+    tot_car  = c.execute("SELECT COUNT(*) FROM carros").fetchone()[0]
+    tot_serv = c.execute("SELECT COUNT(*) FROM servicos_realizados").fetchone()[0]
+    fat_mes  = c.execute("SELECT COALESCE(SUM(total),0) FROM servicos_realizados").fetchone()[0]
     conn.close()
-    
-    with col1:
-        st.metric("👥 Clientes", total_clientes)
-    
-    with col2:
-        st.metric("🚗 Veículos", total_carros)
-    
-    with col3:
-        st.metric("✅ Serviços (mês)", total_servicos_mes)
-    
-    with col4:
-        st.metric("💰 Faturamento (mês)", formatar_moeda(faturamento_mes))
-    
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("👥 Clientes", tot_cli)
+    c2.metric("🚗 Veículos", tot_car)
+    c3.metric("✅ Serviços Realizados", tot_serv)
+    c4.metric("💰 Faturamento Total", fmt_moeda(fat_mes))
     st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
+    l, r = st.columns(2)
+    with l:
         st.subheader("📊 Orçamentos por Status")
-        df_orcamentos = get_orcamentos()
-        if len(df_orcamentos) > 0:
-            status_counts = df_orcamentos['status'].value_counts()
-            st.bar_chart(status_counts)
-        else:
-            st.info("Nenhum orçamento cadastrado ainda")
-    
-    with col2:
+        df_o = get_orcamentos()
+        if len(df_o): st.bar_chart(df_o['status'].value_counts())
+        else: st.info("Nenhum orçamento ainda")
+    with r:
         st.subheader("📈 Últimos Serviços")
-        df_servicos = get_servicos_realizados()
-        if len(df_servicos) > 0:
-            st.dataframe(
-                df_servicos.head(5)[['nome', 'placa', 'data', 'total']],
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Nenhum serviço realizado")
+        df_s = get_servicos_realizados()
+        if len(df_s):
+            st.dataframe(df_s.head(5)[['nome','placa','data','total']],
+                         use_container_width=True, hide_index=True)
+        else: st.info("Nenhum serviço realizado")
 
-# ================= PÁGINA: CLIENTES =================
+# ═══════════════════════════ CLIENTES E CARROS ═══════════════════════════
 
-elif st.session_state.pagina == "👥 Clientes e Carros":
-    st.title("👥 Gestão de Clientes e Veículos")
-    
+elif pag == "👥 Clientes e Carros":
+    st.title("👥 Clientes e Veículos")
     tab1, tab2 = st.tabs(["📋 Clientes", "🚗 Carros"])
-    
+
     with tab1:
         st.subheader("Cadastro de Clientes")
-        
         with st.form("form_cliente"):
-            nome = st.text_input("Nome do Cliente*")
-            
+            nome = st.text_input("Nome do Cliente *")
             col1, col2 = st.columns(2)
-            with col1:
-                telefone = st.text_input("Telefone", placeholder="(00) 00000-0000")
-            with col2:
-                logradouro = st.text_input("Logradouro")
-            
+            with col1: telefone   = st.text_input("Telefone", placeholder="(00) 00000-0000")
+            with col2: logradouro = st.text_input("Endereço")
             numero = st.text_input("Número")
-            
-            submitted = st.form_submit_button("💾 Salvar Cliente", use_container_width=True)
-            
-            if submitted:
+            if st.form_submit_button("💾 Salvar Cliente", use_container_width=True):
                 if nome:
                     salvar_cliente(nome.upper(), telefone, logradouro.upper(), numero)
-                    st.success(f"✅ Cliente '{nome}' salvo!")
-                    st.rerun()
-                else:
-                    st.error("⚠️ Nome é obrigatório!")
-        
+                    st.success(f"✅ Cliente '{nome.upper()}' salvo!"); st.rerun()
+                else: st.error("⚠️ Nome é obrigatório!")
+
         st.markdown("---")
         st.subheader("📋 Clientes Cadastrados")
-        
-        df_clientes = get_clientes()
-        if len(df_clientes) > 0:
-            busca = st.text_input("🔍 Buscar", placeholder="Digite o nome...")
+        df_cli = get_clientes()
+        if len(df_cli):
+            busca = st.text_input("🔍 Buscar cliente", placeholder="Digite o nome...")
             if busca:
-                df_clientes = df_clientes[df_clientes['nome'].str.contains(busca.upper(), na=False)]
-            
-            st.dataframe(df_clientes, use_container_width=True, hide_index=True)
+                df_cli = df_cli[df_cli['nome'].str.contains(busca.upper(), na=False)]
+            # Montar exibição: unir logradouro + numero como "Endereço", remover colunas separadas
+            df_show = df_cli.copy()
+            df_show['Endereço'] = df_show.apply(
+                lambda r: f"{r['logradouro'] or ''} {r['numero'] or ''}".strip(), axis=1)
+            df_show = df_show[['id','nome','telefone','Endereço']]
+            df_show.columns = ['ID','Nome','Telefone','Endereço']
+            st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Cliente")
+            del_opts = {f"{r['ID']} — {r['Nome']}": r['ID'] for _, r in df_show.iterrows()}
+            sel_del  = st.selectbox("Selecione o cliente para excluir", list(del_opts.keys()))
+            cid_del  = del_opts[sel_del]
+            pode, motivo = pode_excluir_cliente(cid_del)
+            if not pode:
+                st.warning(f"⚠️ Não é possível excluir: cliente {motivo}.")
+            else:
+                if st.button("🗑️ Confirmar Exclusão", type="primary"):
+                    excluir_cliente(cid_del)
+                    st.success("✅ Cliente excluído com sucesso!"); st.rerun()
         else:
             st.info("📭 Nenhum cliente cadastrado")
-    
+
     with tab2:
         st.subheader("Cadastro de Veículos")
-        
-        df_clientes = get_clientes()
-        if len(df_clientes) > 0:
-            cliente_opcoes = {f"{row['id']} - {row['nome']}": row['id'] 
-                            for _, row in df_clientes.iterrows()}
-            
-            cliente_sel = st.selectbox("Selecione o Cliente*", list(cliente_opcoes.keys()))
-            cliente_id = cliente_opcoes[cliente_sel]
-            
-            with st.form("form_carro"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    placa = st.text_input("Placa*", placeholder="ABC1234")
-                    marca = st.selectbox("Marca*", [""] + list(MODELOS_POR_MARCA.keys()))
-                
-                with col2:
-                    modelos = MODELOS_POR_MARCA.get(marca, []) if marca else []
-                    modelo = st.selectbox("Modelo*", [""] + modelos)
-                    km = st.number_input("KM", min_value=0, step=1000)
-                
-                submitted = st.form_submit_button("💾 Salvar Veículo", use_container_width=True)
-                
-                if submitted and placa and marca and modelo:
+        df_cli2 = get_clientes()
+        if not len(df_cli2): st.warning("⚠️ Cadastre um cliente primeiro!"); st.stop()
+
+        cli_opts = {f"{r['id']} - {r['nome']}": r['id'] for _, r in df_cli2.iterrows()}
+        cli_sel  = st.selectbox("Cliente *", list(cli_opts.keys()))
+        cli_id   = cli_opts[cli_sel]
+
+        with st.form("form_carro"):
+            col1, col2 = st.columns(2)
+            with col1:
+                placa = st.text_input("Placa *", placeholder="ABC1D23")
+                marca = st.selectbox("Marca *", [""] + sorted(MODELOS_POR_MARCA.keys()))
+            with col2:
+                km = st.number_input("Quilometragem", min_value=0, step=1000)
+                mods = MODELOS_POR_MARCA.get(marca, []) if marca else []
+                if marca == "OUTRA" or not mods:
+                    modelo = st.text_input("Modelo *", placeholder="Digite o modelo")
+                else:
+                    opcoes_mod = mods + ["✏️ Outro (digitar)"]
+                    sel_mod = st.selectbox("Modelo *", [""] + opcoes_mod)
+                    if sel_mod == "✏️ Outro (digitar)":
+                        modelo = st.text_input("Digite o modelo:")
+                    else:
+                        modelo = sel_mod
+
+            if st.form_submit_button("💾 Salvar Veículo", use_container_width=True):
+                if placa and marca and modelo:
                     try:
-                        salvar_carro(cliente_id, placa, marca, modelo, km)
-                        st.success(f"✅ Veículo {placa} salvo!")
-                        st.rerun()
-                    except:
-                        st.error("❌ Placa já cadastrada!")
-            
-            st.markdown("---")
-            st.subheader(f"🚗 Veículos")
-            df_carros = get_carros_por_cliente(cliente_id)
-            if len(df_carros) > 0:
-                st.dataframe(df_carros, use_container_width=True, hide_index=True)
-            else:
-                st.info("📭 Nenhum veículo cadastrado")
-        else:
-            st.warning("⚠️ Cadastre um cliente primeiro!")
+                        salvar_carro(cli_id, placa, marca, modelo.upper(), km)
+                        st.success(f"✅ Veículo {placa.upper()} salvo!"); st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Placa já cadastrada!")
+                else: st.error("⚠️ Preencha placa, marca e modelo!")
 
-# ================= PÁGINA: ORÇAMENTOS =================
+        st.markdown("---")
+        st.subheader("🚗 Veículos Cadastrados")
+        df_car = get_carros_por_cliente(cli_id)
+        if len(df_car):
+            df_c = df_car.copy()
+            df_c['km'] = df_c['km'].apply(fmt_km)
+            df_c = df_c[['id','placa','marca','modelo','km']]
+            df_c.columns = ['ID','Placa','Marca','Modelo','KM']
+            st.dataframe(df_c, use_container_width=True, hide_index=True)
+        else: st.info("📭 Nenhum veículo cadastrado para este cliente")
 
-elif st.session_state.pagina == "💰 Orçamentos":
+# ═══════════════════════════ ORÇAMENTOS ═══════════════════════════
+
+elif pag == "💰 Orçamentos":
     st.title("💰 Novo Orçamento")
-    
-    df_clientes = get_clientes()
-    df_servicos = get_servicos()
-    
-    if len(df_clientes) == 0:
-        st.warning("⚠️ Cadastre clientes primeiro!")
-        st.stop()
-    
-    if len(df_servicos) == 0:
-        st.warning("⚠️ Cadastre serviços no catálogo primeiro!")
-        st.stop()
-    
-    # Seleção de cliente e carro
+    df_cli = get_clientes(); df_srv = get_servicos()
+    if not len(df_cli): st.warning("⚠️ Cadastre clientes primeiro!"); st.stop()
+    if not len(df_srv): st.warning("⚠️ Cadastre serviços no catálogo!"); st.stop()
+
     col1, col2 = st.columns(2)
-    
     with col1:
-        cliente_opcoes = {f"{row['id']} - {row['nome']}": row['id'] 
-                        for _, row in df_clientes.iterrows()}
-        cliente_sel = st.selectbox("1️⃣ Cliente*", list(cliente_opcoes.keys()))
-        cliente_id = cliente_opcoes[cliente_sel]
-    
+        cli_opts = {f"{r['id']} - {r['nome']}": r['id'] for _, r in df_cli.iterrows()}
+        cli_sel  = st.selectbox("1️⃣ Cliente *", list(cli_opts.keys()))
+        cli_id   = cli_opts[cli_sel]
     with col2:
-        df_carros = get_carros_por_cliente(cliente_id)
-        if len(df_carros) > 0:
-            carro_opcoes = {f"{row['placa']} - {row['marca']} {row['modelo']}": row['id'] 
-                          for _, row in df_carros.iterrows()}
-            carro_sel = st.selectbox("2️⃣ Veículo*", list(carro_opcoes.keys()))
-            carro_id = carro_opcoes[carro_sel]
-        else:
-            st.error("⚠️ Cliente não possui veículos cadastrados!")
-            st.stop()
-    
+        df_c = get_carros_por_cliente(cli_id)
+        if not len(df_c): st.error("⚠️ Cliente sem veículos cadastrados!"); st.stop()
+        car_opts = {f"{r['placa']} — {r['marca']} {r['modelo']}": r['id'] for _, r in df_c.iterrows()}
+        car_sel  = st.selectbox("2️⃣ Veículo *", list(car_opts.keys()))
+        car_id   = car_opts[car_sel]
+
     st.markdown("---")
     st.subheader("3️⃣ Adicionar Serviços")
-    
-    # Adicionar item
-    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
-    
+    col1, col2, col3, col4 = st.columns([3,1,1,1])
     with col1:
-        servico_opcoes = {f"{row['id']} - {row['descricao']} - {formatar_moeda(row['valor'])}": 
-                         (row['id'], row['descricao'], row['valor']) 
-                         for _, row in df_servicos.iterrows()}
-        servico_sel = st.selectbox("Serviço", list(servico_opcoes.keys()))
-        servico_id, descricao, valor = servico_opcoes[servico_sel]
-    
-    with col2:
-        quantidade = st.number_input("Qtd", min_value=1, value=1)
-    
-    with col3:
-        valor_unit = st.number_input("Valor", value=float(valor), step=10.0)
-    
+        srv_opts = {f"{r['id']} — {r['descricao']}  ({fmt_moeda(r['valor'])})":
+                    (r['id'], r['descricao'], r['valor']) for _, r in df_srv.iterrows()}
+        srv_sel = st.selectbox("Serviço", list(srv_opts.keys()))
+        sid, desc, val = srv_opts[srv_sel]
+    with col2: qtd   = st.number_input("Qtd", min_value=1, value=1)
+    with col3: vunit = st.number_input("Valor", value=float(val), step=10.0)
     with col4:
-        st.write("")
-        st.write("")
+        st.write(""); st.write("")
         if st.button("➕ Adicionar", use_container_width=True):
-            subtotal = quantidade * valor_unit
-            st.session_state.itens_orcamento.append({
-                'servico_id': servico_id,
-                'descricao': descricao,
-                'quantidade': quantidade,
-                'valor_unitario': valor_unit,
-                'subtotal': subtotal
-            })
+            st.session_state.itens_orcamento.append(
+                {'servico_id':sid,'descricao':desc,'quantidade':qtd,
+                 'valor_unitario':vunit,'subtotal':qtd*vunit})
             st.rerun()
-    
-    # Mostrar itens
-    if len(st.session_state.itens_orcamento) > 0:
+
+    if st.session_state.itens_orcamento:
         st.subheader("📋 Itens do Orçamento")
-        
-        itens_df = pd.DataFrame(st.session_state.itens_orcamento)
-        itens_df['valor_formatado'] = itens_df['valor_unitario'].apply(formatar_moeda)
-        itens_df['subtotal_formatado'] = itens_df['subtotal'].apply(formatar_moeda)
-        
-        st.dataframe(
-            itens_df[['descricao', 'quantidade', 'valor_formatado', 'subtotal_formatado']],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                'descricao': 'Descrição',
-                'quantidade': 'Qtd',
-                'valor_formatado': 'Valor Unit.',
-                'subtotal_formatado': 'Subtotal'
-            }
-        )
-        
-        total = sum(item['subtotal'] for item in st.session_state.itens_orcamento)
-        st.metric("💰 TOTAL", formatar_moeda(total))
-        
-        # Observações e Status
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            observacoes = st.text_area("Observações")
-        
-        with col2:
-            status = st.selectbox("Status", ["PENDENTE", "APROVADO", "RECUSADO", "FINALIZADO"])
-        
-        # Botões
+        df_it = pd.DataFrame(st.session_state.itens_orcamento)
+        df_it['vu_fmt'] = df_it['valor_unitario'].apply(fmt_moeda)
+        df_it['st_fmt'] = df_it['subtotal'].apply(fmt_moeda)
+        st.dataframe(df_it[['descricao','quantidade','vu_fmt','st_fmt']],
+                     use_container_width=True, hide_index=True,
+                     column_config={'descricao':'Descrição','quantidade':'Qtd',
+                                    'vu_fmt':'Valor Unit.','st_fmt':'Subtotal'})
+        total = sum(i['subtotal'] for i in st.session_state.itens_orcamento)
+        st.metric("💰 TOTAL", fmt_moeda(total))
+        col1, col2 = st.columns([3,1])
+        with col1: obs    = st.text_area("Observações")
+        with col2: status = st.selectbox("Status",["PENDENTE","APROVADO","RECUSADO","FINALIZADO"])
         col1, col2 = st.columns(2)
-        
         with col1:
             if st.button("💾 Salvar Orçamento", use_container_width=True, type="primary"):
-                orcamento_id = salvar_orcamento(
-                    cliente_id, carro_id, status, observacoes,
-                    st.session_state.itens_orcamento
-                )
-                st.success(f"✅ Orçamento #{orcamento_id} salvo com sucesso!")
-                st.session_state.itens_orcamento = []
-                st.rerun()
-        
+                oid = salvar_orcamento(cli_id, car_id, status, obs, st.session_state.itens_orcamento)
+                st.success(f"✅ Orçamento #{oid} salvo!")
+                st.session_state.itens_orcamento = []; st.rerun()
         with col2:
             if st.button("🗑️ Limpar Tudo", use_container_width=True):
-                st.session_state.itens_orcamento = []
-                st.rerun()
-    else:
-        st.info("➕ Adicione serviços ao orçamento")
+                st.session_state.itens_orcamento = []; st.rerun()
+    else: st.info("➕ Adicione serviços ao orçamento")
 
-# ================= PÁGINA: HISTÓRICO =================
+# ═══════════════════════════ HISTÓRICO ═══════════════════════════
 
-elif st.session_state.pagina == "📜 Histórico":
+elif pag == "📜 Histórico":
     st.title("📜 Histórico de Orçamentos")
-    
-    df_orcamentos = get_orcamentos()
-    
-    if len(df_orcamentos) > 0:
-        status_filtro = st.multiselect(
-            "Filtrar por Status",
-            options=df_orcamentos['status'].unique().tolist(),
-            default=df_orcamentos['status'].unique().tolist()
-        )
-        
-        df_filtrado = df_orcamentos[df_orcamentos['status'].isin(status_filtro)]
-        
-        # Adicionar botão de download PDF
-        for idx, row in df_filtrado.iterrows():
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 2, 2, 2, 2, 2])
-            
-            with col1:
-                st.write(f"**#{row['id']}**")
-            with col2:
-                st.write(row['nome'])
-            with col3:
-                st.write(row['placa'])
-            with col4:
-                st.write(row['data'])
-            with col5:
-                st.write(row['status'])
-            with col6:
-                st.write(formatar_moeda(row['total']))
-            with col7:
-                if st.button("📄 PDF", key=f"pdf_{row['id']}"):
-                    pdf_buffer = gerar_pdf_orcamento(row['id'])
-                    st.download_button(
-                        label="⬇️ Baixar",
-                        data=pdf_buffer,
-                        file_name=f"Orcamento_{row['id']:04d}.pdf",
-                        mime="application/pdf",
-                        key=f"download_{row['id']}"
-                    )
-        
-        st.markdown("---")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Pendentes", len(df_filtrado[df_filtrado['status'] == 'PENDENTE']))
-        with col2:
-            st.metric("Aprovados", len(df_filtrado[df_filtrado['status'] == 'APROVADO']))
-        with col3:
-            st.metric("Total", formatar_moeda(df_filtrado['total'].sum()))
-    else:
-        st.info("📭 Nenhum orçamento cadastrado")
+    df_o = get_orcamentos()
+    if not len(df_o): st.info("📭 Nenhum orçamento cadastrado"); st.stop()
+    filtro = st.multiselect("Filtrar por Status", df_o['status'].unique().tolist(),
+                            default=df_o['status'].unique().tolist())
+    df_f = df_o[df_o['status'].isin(filtro)]
+    for _, row in df_f.iterrows():
+        cols = st.columns([1,3,2,2,2,2,2])
+        cols[0].write(f"**#{row['id']}**")
+        cols[1].write(row['nome']); cols[2].write(row['placa'])
+        cols[3].write(row['data']); cols[4].write(row['status'])
+        cols[5].write(fmt_moeda(row['total']))
+        with cols[6]:
+            pdf = gerar_pdf_orcamento(row['id'])
+            st.download_button("📄 PDF", pdf,
+                               file_name=f"Orcamento_{row['id']:04d}.pdf",
+                               mime="application/pdf", key=f"dl_{row['id']}")
+    st.markdown("---")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Pendentes", len(df_f[df_f['status']=='PENDENTE']))
+    c2.metric("Aprovados",  len(df_f[df_f['status']=='APROVADO']))
+    c3.metric("Total Geral", fmt_moeda(df_f['total'].sum()))
 
-# ================= PÁGINA: SERVIÇOS REALIZADOS =================
+# ═══════════════════════════ SERVIÇOS REALIZADOS ═══════════════════════════
 
-elif st.session_state.pagina == "✅ Serviços Realizados":
+elif pag == "✅ Serviços Realizados":
     st.title("✅ Serviços Realizados")
-    
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        data_ini = st.date_input("Data Inicial", value=datetime.now().replace(day=1))
+        d_ini = st.date_input("Data Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY")
     with col2:
-        data_fim = st.date_input("Data Final", value=datetime.now())
+        d_fim = st.date_input("Data Final",   value=date.today(),                format="DD/MM/YYYY")
     with col3:
-        st.write("")
-        st.write("")
-        filtrar = st.button("🔍 Filtrar", use_container_width=True)
-    
-    data_ini_str = data_ini.strftime("%d/%m/%Y")
-    data_fim_str = data_fim.strftime("%d/%m/%Y")
-    
-    df_servicos = get_servicos_realizados(data_ini_str, data_fim_str)
-    
-    if len(df_servicos) > 0:
-        total_periodo = df_servicos['total'].sum()
-        
-        st.metric("💰 Total do Período", formatar_moeda(total_periodo), 
-                 delta=f"{len(df_servicos)} serviço(s)")
-        
+        st.write(""); st.write("")
+        st.button("🔍 Filtrar", use_container_width=True)
+
+    ini_str = d_ini.strftime("%d/%m/%Y")
+    fim_str = d_fim.strftime("%d/%m/%Y")
+    df_s = get_servicos_realizados(ini_str, fim_str)
+
+    if len(df_s):
+        st.metric("💰 Total do Período", fmt_moeda(df_s['total'].sum()),
+                  delta=f"{len(df_s)} serviço(s)")
         st.markdown("---")
-        
-        df_display = df_servicos.copy()
-        df_display['total'] = df_display['total'].apply(formatar_moeda)
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-    else:
-        st.info("📭 Nenhum serviço no período")
+        df_show = df_s.copy()
+        df_show['total'] = df_show['total'].apply(fmt_moeda)
+        df_show.columns = ['Nº','Cliente','Placa','Data','Total']
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+    else: st.info("📭 Nenhum serviço no período selecionado")
 
-# ================= PÁGINA: CATÁLOGO =================
+# ═══════════════════════════ CATÁLOGO ═══════════════════════════
 
-elif st.session_state.pagina == "📚 Catálogo":
+elif pag == "📚 Catálogo":
     st.title("📚 Catálogo de Serviços")
-    
-    col1, col2 = st.columns([1, 2])
-    
+    col1, col2 = st.columns([1,2])
     with col1:
         st.subheader("Novo Serviço")
-        
-        with st.form("form_servico"):
-            descricao = st.text_input("Descrição*")
-            valor = st.number_input("Valor (R$)*", min_value=0.0, step=10.0, format="%.2f")
-            
-            submitted = st.form_submit_button("💾 Salvar", use_container_width=True)
-            
-            if submitted and descricao and valor > 0:
-                salvar_servico(descricao, valor)
-                st.success("✅ Serviço salvo!")
-                st.rerun()
-    
+        with st.form("form_srv"):
+            desc  = st.text_input("Descrição *")
+            valor = st.number_input("Valor (R$) *", min_value=0.0, step=10.0, format="%.2f")
+            if st.form_submit_button("💾 Salvar", use_container_width=True):
+                if desc and valor > 0:
+                    salvar_servico(desc, valor); st.success("✅ Salvo!"); st.rerun()
+                else: st.warning("⚠️ Preencha todos os campos!")
     with col2:
         st.subheader("Serviços Cadastrados")
-        
-        df_servicos = get_servicos()
-        
-        if len(df_servicos) > 0:
-            df_display = df_servicos.copy()
-            df_display['valor'] = df_display['valor'].apply(formatar_moeda)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
-        else:
-            st.info("📭 Nenhum serviço cadastrado")
+        df_srv = get_servicos()
+        if len(df_srv):
+            df_d = df_srv.copy()
+            df_d['valor'] = df_d['valor'].apply(fmt_moeda)
+            st.dataframe(df_d, use_container_width=True, hide_index=True)
+        else: st.info("📭 Nenhum serviço cadastrado")
 
-# ================= PÁGINA: ALTERAR SENHA =================
+# ═══════════════════════════ ALTERAR SENHA ═══════════════════════════
 
-elif st.session_state.pagina == "🔑 Alterar Senha":
+elif pag == "🔑 Alterar Senha":
     st.title("🔑 Alterar Senha")
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        st.info(f"👤 Usuário: **{st.session_state.user_nome}**")
+    _, col, _ = st.columns([1,2,1])
+    with col:
+        st.info(f"👤 Usuário logado: **{st.session_state.user_nome}**")
         st.markdown("---")
-
-        with st.form("form_alterar_senha"):
-            senha_atual = st.text_input(
-                "🔒 Senha Atual",
-                type="password",
-                placeholder="Digite sua senha atual"
-            )
-
-            nova_senha = st.text_input(
-                "🔑 Nova Senha",
-                type="password",
-                placeholder="Mínimo 6 caracteres"
-            )
-
-            confirmar_senha = st.text_input(
-                "✅ Confirmar Nova Senha",
-                type="password",
-                placeholder="Repita a nova senha"
-            )
-
-            submitted = st.form_submit_button(
-                "💾 Salvar Nova Senha",
-                use_container_width=True
-            )
-
-            if submitted:
-                # Validações
-                if not senha_atual or not nova_senha or not confirmar_senha:
-                    st.error("⚠️ Preencha todos os campos!")
-
-                elif len(nova_senha) < 6:
-                    st.error("⚠️ A nova senha deve ter pelo menos 6 caracteres!")
-
-                elif nova_senha != confirmar_senha:
-                    st.error("⚠️ A nova senha e a confirmação não coincidem!")
-
-                elif nova_senha == senha_atual:
-                    st.warning("⚠️ A nova senha deve ser diferente da senha atual!")
-
+        with st.form("form_senha"):
+            atual    = st.text_input("🔒 Senha Atual",          type="password")
+            nova     = st.text_input("🔑 Nova Senha",           type="password")
+            confirma = st.text_input("✅ Confirmar Nova Senha",  type="password")
+            if st.form_submit_button("💾 Salvar Nova Senha", use_container_width=True):
+                if not (atual and nova and confirma): st.error("⚠️ Preencha todos os campos!")
+                elif len(nova) < 6:                  st.error("⚠️ Mínimo 6 caracteres!")
+                elif nova != confirma:               st.error("⚠️ Confirmação não coincide!")
+                elif nova == atual:                  st.warning("⚠️ Nova senha igual à atual!")
                 else:
-                    ok, msg = alterar_senha(
-                        st.session_state.user_id,
-                        senha_atual,
-                        nova_senha
-                    )
-                    if ok:
-                        st.success(f"✅ {msg}")
-                        st.balloons()
-                    else:
-                        st.error(f"❌ {msg}")
-
+                    ok, msg = alterar_senha(st.session_state.user_id, atual, nova)
+                    if ok: st.success(f"✅ {msg}"); st.balloons()
+                    else:  st.error(f"❌ {msg}")
         st.markdown("---")
-        st.markdown("""
-        **💡 Dicas para uma boa senha:**
-        - Mínimo de 6 caracteres
-        - Misture letras maiúsculas e minúsculas
-        - Use números e símbolos (ex: @, #, !)
-        - Evite datas de nascimento ou sequências óbvias
-        """)
+        st.markdown("**💡 Dicas:** mínimo 6 caracteres, misture letras, números e símbolos.")
 
+# ═══════════════════════════ GERENCIAR USUÁRIOS ═══════════════════════════
+
+elif pag == "👤 Usuários":
+    st.title("👤 Gerenciar Usuários")
+    if st.session_state.user_nivel != "admin":
+        st.error("🚫 Acesso restrito ao administrador."); st.stop()
+
+    tab1, tab2 = st.tabs(["➕ Novo / Editar Usuário", "📋 Usuários Cadastrados"])
+
+    with tab1:
+        st.subheader("Cadastrar Novo Usuário")
+        with st.form("form_usuario"):
+            col1, col2 = st.columns(2)
+            with col1:
+                u_username = st.text_input("Login (usuário) *")
+                u_nome     = st.text_input("Nome Completo *")
+            with col2:
+                u_nivel = st.selectbox("Nível de Acesso", ["operador","admin"])
+                u_senha = st.text_input("Senha *", type="password")
+
+            st.markdown("**🔐 Menus permitidos para este usuário:**")
+            col_a, col_b = st.columns(2)
+            menus_sel = []
+            for idx, menu in enumerate(TODOS_MENUS):
+                col = col_a if idx % 2 == 0 else col_b
+                # Admin sempre tem todos; Alterar Senha sempre permitido
+                default = True if menu in ["🏠 Dashboard","🔑 Alterar Senha"] else True
+                if col.checkbox(menu, value=default, key=f"ck_{menu}"):
+                    menus_sel.append(menu)
+
+            if st.form_submit_button("💾 Salvar Usuário", use_container_width=True):
+                if u_username and u_nome and u_senha:
+                    ok, msg = salvar_usuario(u_username, u_nome, u_nivel, menus_sel, senha=u_senha)
+                    if ok: st.success(f"✅ {msg}"); st.rerun()
+                    else:  st.error(f"❌ {msg}")
+                else: st.error("⚠️ Login, Nome e Senha são obrigatórios!")
+
+    with tab2:
+        st.subheader("Usuários Cadastrados")
+        df_u = get_usuarios()
+        if len(df_u):
+            st.dataframe(df_u[['id','username','nome','nivel']],
+                         use_container_width=True, hide_index=True,
+                         column_config={'id':'ID','username':'Login',
+                                        'nome':'Nome','nivel':'Nível'})
+            st.markdown("---")
+            st.subheader("🔐 Permissões por Usuário")
+            for _, row in df_u.iterrows():
+                with st.expander(f"👤 {row['nome']}  ({row['username']})"):
+                    menus_atuais = (row['menus_permitidos'] or "").split(",")
+                    col_a, col_b = st.columns(2)
+                    novos = []
+                    for idx, menu in enumerate(TODOS_MENUS):
+                        col = col_a if idx % 2 == 0 else col_b
+                        if col.checkbox(menu, value=(menu in menus_atuais),
+                                        key=f"perm_{row['id']}_{idx}"):
+                            novos.append(menu)
+                    if st.button(f"💾 Salvar Permissões", key=f"sv_{row['id']}"):
+                        salvar_usuario(row['username'], row['nome'], row['nivel'],
+                                       novos, uid=row['id'])
+                        st.success("✅ Permissões salvas!"); st.rerun()
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Usuário")
+            del_opts = {f"{r['id']} — {r['nome']}  ({r['username']})": r['id']
+                        for _, r in df_u.iterrows() if r['username'] != 'admin'}
+            if del_opts:
+                del_sel = st.selectbox("Selecione o usuário", list(del_opts.keys()))
+                del_id  = del_opts[del_sel]
+                if st.button("🗑️ Excluir Usuário Selecionado", type="primary"):
+                    excluir_usuario(del_id); st.success("✅ Excluído!"); st.rerun()
+            else:
+                st.info("Nenhum usuário disponível para exclusão (admin não pode ser excluído)")
+        else:
+            st.info("📭 Nenhum usuário cadastrado")
