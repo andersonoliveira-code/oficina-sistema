@@ -89,6 +89,28 @@ def verificar_login(username, password):
     
     return resultado
 
+def alterar_senha(user_id, senha_atual, nova_senha):
+    """Altera a senha do usuário"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    # Verificar senha atual
+    senha_hash_atual = hash_password(senha_atual)
+    c.execute("SELECT id FROM usuarios WHERE id=? AND password=?",
+              (user_id, senha_hash_atual))
+
+    if not c.fetchone():
+        conn.close()
+        return False, "Senha atual incorreta!"
+
+    # Atualizar para nova senha
+    nova_hash = hash_password(nova_senha)
+    c.execute("UPDATE usuarios SET password=? WHERE id=?",
+              (nova_hash, user_id))
+    conn.commit()
+    conn.close()
+    return True, "Senha alterada com sucesso!"
+
 def tela_login():
     """Tela de login"""
     st.markdown("""
@@ -143,58 +165,58 @@ def tela_login():
 def load_css():
     st.markdown("""
     <style>
-        /* Tema principal */
-        .main {
-            padding: 1rem;
+        [data-testid="stSidebar"] {
+            background-color: #1a2634;
         }
-        
-        /* Cabeçalhos */
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] div,
+        [data-testid="stSidebar"] small {
+            color: #f0f4f8 !important;
+        }
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: #ffffff !important;
+        }
+        [data-testid="stSidebar"] hr {
+            border-color: #2d3f53 !important;
+        }
+        [data-testid="stSidebar"] .stButton > button {
+            background-color: #c0392b !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 6px !important;
+            font-weight: bold !important;
+            width: 100%;
+        }
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background-color: #a93226 !important;
+        }
+        .main { padding: 1rem; }
         h1 {
             color: #1f77b4;
             padding-bottom: 0.5rem;
             border-bottom: 3px solid #1f77b4;
+            margin-bottom: 1.5rem;
         }
-        
-        h2 {
-            color: #2c3e50;
-            margin-top: 2rem;
-        }
-        
-        /* Botões */
-        .stButton>button {
+        h2 { color: #2c3e50; margin-top: 1.5rem; }
+        .main .stButton > button {
             background-color: #1f77b4;
             color: white;
-            border-radius: 5px;
-            padding: 0.5rem;
+            border-radius: 6px;
             font-weight: bold;
             border: none;
         }
-        
-        .stButton>button:hover {
+        .main .stButton > button:hover {
             background-color: #155a8a;
-            border: none;
         }
-        
-        /* Cards */
-        .metric-card {
-            background-color: #f0f2f6;
-            padding: 1rem;
+        [data-testid="stMetric"] {
+            background-color: #f7f9fc;
             border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        /* Sidebar */
-        [data-testid="stSidebar"] {
-            background-color: #2c3e50;
-        }
-        
-        /* Success messages */
-        .stSuccess {
-            background-color: #d4edda;
-            border-color: #c3e6cb;
-            color: #155724;
             padding: 1rem;
-            border-radius: 5px;
+            border: 1px solid #e2e8f0;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -621,8 +643,9 @@ with st.sidebar:
     
     st.session_state.pagina = st.radio(
         "📋 Menu Principal",
-        ["🏠 Dashboard", "👥 Clientes e Carros", "💰 Orçamentos", 
-         "📜 Histórico", "✅ Serviços Realizados", "📚 Catálogo"]
+        ["🏠 Dashboard", "👥 Clientes e Carros", "💰 Orçamentos",
+         "📜 Histórico", "✅ Serviços Realizados", "📚 Catálogo",
+         "🔑 Alterar Senha"]
     )
     
     st.markdown("---")
@@ -1020,4 +1043,74 @@ elif st.session_state.pagina == "📚 Catálogo":
             st.dataframe(df_display, use_container_width=True, hide_index=True)
         else:
             st.info("📭 Nenhum serviço cadastrado")
+
+# ================= PÁGINA: ALTERAR SENHA =================
+
+elif st.session_state.pagina == "🔑 Alterar Senha":
+    st.title("🔑 Alterar Senha")
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.info(f"👤 Usuário: **{st.session_state.user_nome}**")
+        st.markdown("---")
+
+        with st.form("form_alterar_senha"):
+            senha_atual = st.text_input(
+                "🔒 Senha Atual",
+                type="password",
+                placeholder="Digite sua senha atual"
+            )
+
+            nova_senha = st.text_input(
+                "🔑 Nova Senha",
+                type="password",
+                placeholder="Mínimo 6 caracteres"
+            )
+
+            confirmar_senha = st.text_input(
+                "✅ Confirmar Nova Senha",
+                type="password",
+                placeholder="Repita a nova senha"
+            )
+
+            submitted = st.form_submit_button(
+                "💾 Salvar Nova Senha",
+                use_container_width=True
+            )
+
+            if submitted:
+                # Validações
+                if not senha_atual or not nova_senha or not confirmar_senha:
+                    st.error("⚠️ Preencha todos os campos!")
+
+                elif len(nova_senha) < 6:
+                    st.error("⚠️ A nova senha deve ter pelo menos 6 caracteres!")
+
+                elif nova_senha != confirmar_senha:
+                    st.error("⚠️ A nova senha e a confirmação não coincidem!")
+
+                elif nova_senha == senha_atual:
+                    st.warning("⚠️ A nova senha deve ser diferente da senha atual!")
+
+                else:
+                    ok, msg = alterar_senha(
+                        st.session_state.user_id,
+                        senha_atual,
+                        nova_senha
+                    )
+                    if ok:
+                        st.success(f"✅ {msg}")
+                        st.balloons()
+                    else:
+                        st.error(f"❌ {msg}")
+
+        st.markdown("---")
+        st.markdown("""
+        **💡 Dicas para uma boa senha:**
+        - Mínimo de 6 caracteres
+        - Misture letras maiúsculas e minúsculas
+        - Use números e símbolos (ex: @, #, !)
+        - Evite datas de nascimento ou sequências óbvias
+        """)
 
