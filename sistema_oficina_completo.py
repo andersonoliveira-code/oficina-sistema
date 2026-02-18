@@ -11,10 +11,11 @@ import hashlib
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 import os
+import qrcode
 
 st.set_page_config(page_title="Sistema Oficina", page_icon="🔧",
                    layout="wide", initial_sidebar_state="expanded")
@@ -48,7 +49,7 @@ MODELOS_POR_MARCA = {
 
 TODOS_MENUS = ["🏠 Dashboard","👥 Clientes e Carros","💰 Orçamentos",
                "📜 Histórico","✅ Serviços Realizados","📚 Catálogo",
-               "🔑 Alterar Senha","👤 Usuários"]
+               "🔑 Alterar Senha","👤 Usuários","⚙️ Configurações"]
 
 # ═══════════════════════════ BANCO ═══════════════════════════
 
@@ -87,15 +88,33 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE, password TEXT,
             nome TEXT, nivel TEXT, menus_permitidos TEXT);
+        CREATE TABLE IF NOT EXISTS configuracoes (
+            chave TEXT PRIMARY KEY,
+            valor TEXT);
     """)
     c.execute("SELECT id FROM usuarios WHERE username='admin'")
     if not c.fetchone():
         c.execute("""INSERT INTO usuarios(username,password,nome,nivel,menus_permitidos)
                      VALUES('admin',?,  'Administrador','admin',?)""",
                   (hashlib.sha256("admin123".encode()).hexdigest(), ",".join(TODOS_MENUS)))
+    # Config padrão PIX
+    c.execute("SELECT valor FROM configuracoes WHERE chave='chave_pix'")
+    if not c.fetchone():
+        c.execute("INSERT INTO configuracoes(chave,valor) VALUES('chave_pix','19995056708')")
     conn.commit(); conn.close()
 
 def get_conn(): return sqlite3.connect(DB)
+
+def get_config(chave, padrao=""):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("SELECT valor FROM configuracoes WHERE chave=?", (chave,))
+    r = c.fetchone(); conn.close()
+    return r[0] if r else padrao
+
+def set_config(chave, valor):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO configuracoes(chave,valor) VALUES(?,?)", (chave,valor))
+    conn.commit(); conn.close()
 
 # ═══════════════════════════ AUTENTICAÇÃO ═══════════════════════════
 
@@ -174,6 +193,18 @@ def fmt_km(v):
 
 def agora_br(): return datetime.now().strftime("%d/%m/%Y %H:%M")
 
+def gerar_qrcode_pix(chave_pix, valor):
+    """Gera QR Code PIX"""
+    pix_str = chave_pix  # Simplificado - em produção usar formato EMV
+    qr = qrcode.QRCode(version=1, box_size=10, border=1)
+    qr.add_data(pix_str)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
 # ═══════════════════════════ DADOS — CLIENTES ═══════════════════════════
 
 def get_clientes():
@@ -239,6 +270,11 @@ def salvar_servico(descricao, valor, sid=None):
     else:
         c.execute("INSERT INTO catalogo_servicos(descricao,valor) VALUES(?,?)",
                   (descricao.upper(), valor))
+    conn.commit(); conn.close()
+
+def excluir_servico(sid):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("DELETE FROM catalogo_servicos WHERE id=?", (sid,))
     conn.commit(); conn.close()
 
 def salvar_orcamento(cliente_id, carro_id, status, observacoes, itens):
@@ -331,6 +367,20 @@ def gerar_pdf_orcamento(oid):
                               ('FONTSIZE',(0,0),(-1,-1),13),
                               ('ALIGN',(2,0),(-1,-1),'RIGHT')]))
     elems.append(tot)
+    elems.append(Spacer(1, 20))
+    
+    # ─── QR CODE PIX ───
+    chave_pix = get_config('chave_pix', '19995056708')
+    qr_img_buf = gerar_qrcode_pix(chave_pix, orc[11])
+    
+    pix_txt = Paragraph(f"<b>Pagamento via PIX</b><br/>Chave: {chave_pix}<br/>Valor: R$ {orc[11]:.2f}",
+                        styles['Normal'])
+    elems.append(pix_txt)
+    elems.append(Spacer(1, 10))
+    
+    qr_img = RLImage(qr_img_buf, width=1.5*inch, height=1.5*inch)
+    elems.append(qr_img)
+    
     doc.build(elems); buf.seek(0); return buf
 
 # ═══════════════════════════ DADOS — USUÁRIOS ═══════════════════════════
@@ -663,24 +713,49 @@ elif pag == "✅ Serviços Realizados":
 
 elif pag == "📚 Catálogo":
     st.title("📚 Catálogo de Serviços")
-    col1, col2 = st.columns([1,2])
-    with col1:
-        st.subheader("Novo Serviço")
-        with st.form("form_srv"):
+    
+    tab1, tab2 = st.tabs(["➕ Novo Serviço", "📋 Gerenciar Serviços"])
+    
+    with tab1:
+        st.subheader("Cadastrar Novo Serviço")
+        with st.form("form_srv_novo"):
             desc  = st.text_input("Descrição *")
             valor = st.number_input("Valor (R$) *", min_value=0.0, step=10.0, format="%.2f")
-            if st.form_submit_button("💾 Salvar", use_container_width=True):
+            if st.form_submit_button("💾 Salvar Novo Serviço", use_container_width=True):
                 if desc and valor > 0:
-                    salvar_servico(desc, valor); st.success("✅ Salvo!"); st.rerun()
-                else: st.warning("⚠️ Preencha todos os campos!")
-    with col2:
+                    salvar_servico(desc, valor)
+                    st.success("✅ Serviço salvo!")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Preencha todos os campos!")
+    
+    with tab2:
         st.subheader("Serviços Cadastrados")
         df_srv = get_servicos()
+        
         if len(df_srv):
-            df_d = df_srv.copy()
-            df_d['valor'] = df_d['valor'].apply(fmt_moeda)
-            st.dataframe(df_d, use_container_width=True, hide_index=True)
-        else: st.info("📭 Nenhum serviço cadastrado")
+            # Exibir com opções de editar/excluir
+            for _, row in df_srv.iterrows():
+                with st.expander(f"🔧 {row['descricao']}  — {fmt_moeda(row['valor'])}"):
+                    with st.form(f"edit_srv_{row['id']}"):
+                        nova_desc = st.text_input("Descrição", value=row['descricao'], key=f"desc_{row['id']}")
+                        novo_valor = st.number_input("Valor (R$)", value=float(row['valor']),
+                                                     min_value=0.0, step=10.0, format="%.2f",
+                                                     key=f"val_{row['id']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("💾 Salvar Alterações", use_container_width=True):
+                                salvar_servico(nova_desc, novo_valor, row['id'])
+                                st.success("✅ Serviço atualizado!")
+                                st.rerun()
+                        with col2:
+                            if st.form_submit_button("🗑️ Excluir Serviço", use_container_width=True):
+                                excluir_servico(row['id'])
+                                st.success("✅ Serviço excluído!")
+                                st.rerun()
+        else:
+            st.info("📭 Nenhum serviço cadastrado")
 
 # ═══════════════════════════ ALTERAR SENHA ═══════════════════════════
 
@@ -781,3 +856,52 @@ elif pag == "👤 Usuários":
                 st.info("Nenhum usuário disponível para exclusão (admin não pode ser excluído)")
         else:
             st.info("📭 Nenhum usuário cadastrado")
+
+# ═══════════════════════════ CONFIGURAÇÕES ═══════════════════════════
+
+elif pag == "⚙️ Configurações":
+    st.title("⚙️ Configurações do Sistema")
+    
+    if st.session_state.user_nivel != "admin":
+        st.error("🚫 Acesso restrito ao administrador.")
+        st.stop()
+    
+    st.subheader("💳 Configurações de Pagamento PIX")
+    
+    chave_atual = get_config('chave_pix', '19995056708')
+    
+    with st.form("form_pix"):
+        st.info("Esta chave PIX será exibida no QR Code dos orçamentos em PDF")
+        
+        nova_chave = st.text_input(
+            "Chave PIX (Telefone, E-mail, CPF/CNPJ ou Chave Aleatória)",
+            value=chave_atual,
+            placeholder="Ex: 19995056708"
+        )
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.caption("💡 Essa chave será incluída no QR Code para facilitar o pagamento dos clientes")
+        with col2:
+            if st.form_submit_button("💾 Salvar Configuração", use_container_width=True):
+                if nova_chave:
+                    set_config('chave_pix', nova_chave)
+                    st.success("✅ Chave PIX atualizada com sucesso!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error("⚠️ Informe uma chave PIX válida!")
+    
+    st.markdown("---")
+    st.subheader("ℹ️ Informações do Sistema")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("📦 Versão", "2.0")
+        st.metric("🗄️ Banco de Dados", "SQLite")
+    with col2:
+        st.metric("👥 Total de Usuários", len(get_usuarios()))
+        st.metric("🔧 Serviços Cadastrados", len(get_servicos()))
+    
+    st.markdown("---")
+    st.caption("💡 Outras configurações podem ser adicionadas aqui conforme necessário")
