@@ -193,12 +193,77 @@ def fmt_km(v):
 
 def agora_br(): return datetime.now().strftime("%d/%m/%Y %H:%M")
 
-def gerar_qrcode_pix(chave_pix, valor):
-    """Gera QR Code PIX"""
-    pix_str = chave_pix  # Simplificado - em produção usar formato EMV
-    qr = qrcode.QRCode(version=1, box_size=10, border=1)
-    qr.add_data(pix_str)
+def gerar_qrcode_pix(chave_pix, valor, nome_beneficiario="Oficina"):
+    """Gera QR Code PIX no formato EMV (padrão brasileiro válido)"""
+    
+    # Limpar chave (remover espaços e caracteres especiais de formatação)
+    chave_limpa = chave_pix.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    
+    # Construir payload PIX no formato EMV (BRCode)
+    # ID 00: Payload Format Indicator
+    pfi = "000201"
+    
+    # ID 26: Merchant Account Information
+    gui = "0014br.gov.bcb.pix"  # 14 caracteres
+    chave_field = f"01{len(chave_limpa):02d}{chave_limpa}"
+    mai_content = gui + chave_field
+    mai = f"26{len(mai_content):02d}{mai_content}"
+    
+    # ID 52: Merchant Category Code
+    mcc = "52040000"
+    
+    # ID 53: Transaction Currency (986 = BRL)
+    currency = "5303986"
+    
+    # ID 54: Transaction Amount
+    valor_str = f"{valor:.2f}"
+    amount = f"54{len(valor_str):02d}{valor_str}"
+    
+    # ID 58: Country Code
+    country = "5802BR"
+    
+    # ID 59: Merchant Name
+    nome_clean = nome_beneficiario[:25].upper()
+    merchant = f"59{len(nome_clean):02d}{nome_clean}"
+    
+    # ID 60: Merchant City
+    city = "6009SAO PAULO"
+    
+    # ID 62: Additional Data Field (opcional, mas recomendado)
+    ref = "***"  # Referência/ID da transação
+    adf_content = f"05{len(ref):02d}{ref}"
+    adf = f"62{len(adf_content):02d}{adf_content}"
+    
+    # Montar payload sem CRC
+    payload_sem_crc = pfi + mai + mcc + currency + amount + country + merchant + city + adf + "6304"
+    
+    # Calcular CRC16-CCITT
+    def crc16_ccitt(data):
+        crc = 0xFFFF
+        for byte in data.encode('utf-8'):
+            crc ^= byte << 8
+            for _ in range(8):
+                if crc & 0x8000:
+                    crc = (crc << 1) ^ 0x1021
+                else:
+                    crc = crc << 1
+                crc &= 0xFFFF
+        return f"{crc:04X}"
+    
+    # Payload final com CRC
+    crc = crc16_ccitt(payload_sem_crc)
+    payload_completo = payload_sem_crc + crc
+    
+    # Gerar QR Code
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2
+    )
+    qr.add_data(payload_completo)
     qr.make(fit=True)
+    
     img = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     img.save(buf, format='PNG')
@@ -792,7 +857,12 @@ elif pag == "👤 Usuários":
 
     with tab1:
         st.subheader("Cadastrar Novo Usuário")
-        with st.form("form_usuario"):
+        
+        # Usar key única para forçar reset do form após salvar
+        if 'form_user_key' not in st.session_state:
+            st.session_state.form_user_key = 0
+        
+        with st.form(f"form_usuario_{st.session_state.form_user_key}"):
             col1, col2 = st.columns(2)
             with col1:
                 u_username = st.text_input("Login (usuário) *")
@@ -806,17 +876,21 @@ elif pag == "👤 Usuários":
             menus_sel = []
             for idx, menu in enumerate(TODOS_MENUS):
                 col = col_a if idx % 2 == 0 else col_b
-                # Admin sempre tem todos; Alterar Senha sempre permitido
                 default = True if menu in ["🏠 Dashboard","🔑 Alterar Senha"] else True
-                if col.checkbox(menu, value=default, key=f"ck_{menu}"):
+                if col.checkbox(menu, value=default, key=f"ck_{menu}_{st.session_state.form_user_key}"):
                     menus_sel.append(menu)
 
             if st.form_submit_button("💾 Salvar Usuário", use_container_width=True):
                 if u_username and u_nome and u_senha:
                     ok, msg = salvar_usuario(u_username, u_nome, u_nivel, menus_sel, senha=u_senha)
-                    if ok: st.success(f"✅ {msg}"); st.rerun()
-                    else:  st.error(f"❌ {msg}")
-                else: st.error("⚠️ Login, Nome e Senha são obrigatórios!")
+                    if ok:
+                        st.success(f"✅ {msg}")
+                        st.session_state.form_user_key += 1  # Incrementa para resetar form
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {msg}")
+                else:
+                    st.error("⚠️ Login, Nome e Senha são obrigatórios!")
 
     with tab2:
         st.subheader("Usuários Cadastrados")
