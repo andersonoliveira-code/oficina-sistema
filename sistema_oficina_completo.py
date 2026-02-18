@@ -197,14 +197,21 @@ def gerar_qrcode_pix(chave_pix, valor, nome_beneficiario="Oficina"):
     """Gera QR Code PIX no formato EMV (padrão brasileiro válido)"""
     
     # Limpar chave (remover espaços e caracteres especiais de formatação)
-    chave_limpa = chave_pix.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    chave_limpa = chave_pix.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+", "")
+    
+    # Para telefone, adicionar +55 se não tiver
+    if chave_limpa.isdigit() and len(chave_limpa) >= 10:
+        # É um número de telefone
+        if not chave_limpa.startswith("55"):
+            chave_limpa = "55" + chave_limpa
+        chave_limpa = "+" + chave_limpa
     
     # Construir payload PIX no formato EMV (BRCode)
     # ID 00: Payload Format Indicator
     pfi = "000201"
     
     # ID 26: Merchant Account Information
-    gui = "0014br.gov.bcb.pix"  # 14 caracteres
+    gui = "0014br.gov.bcb.pix"
     chave_field = f"01{len(chave_limpa):02d}{chave_limpa}"
     mai_content = gui + chave_field
     mai = f"26{len(mai_content):02d}{mai_content}"
@@ -229,8 +236,8 @@ def gerar_qrcode_pix(chave_pix, valor, nome_beneficiario="Oficina"):
     # ID 60: Merchant City
     city = "6009SAO PAULO"
     
-    # ID 62: Additional Data Field (opcional, mas recomendado)
-    ref = "***"  # Referência/ID da transação
+    # ID 62: Additional Data Field
+    ref = "***"
     adf_content = f"05{len(ref):02d}{ref}"
     adf = f"62{len(adf_content):02d}{adf_content}"
     
@@ -460,6 +467,7 @@ def salvar_usuario(username, nome, nivel, menus, uid=None, senha=None):
     menus_str = ",".join(menus)
     try:
         if uid:
+            # Editando usuário existente
             if senha:
                 c.execute("UPDATE usuarios SET username=?,nome=?,nivel=?,menus_permitidos=?,password=? WHERE id=?",
                           (username, nome, nivel, menus_str, hash_pw(senha), uid))
@@ -467,12 +475,31 @@ def salvar_usuario(username, nome, nivel, menus, uid=None, senha=None):
                 c.execute("UPDATE usuarios SET username=?,nome=?,nivel=?,menus_permitidos=? WHERE id=?",
                           (username, nome, nivel, menus_str, uid))
         else:
-            if not senha: conn.close(); return False, "Informe a senha para novo usuário!"
+            # Criando novo usuário
+            if not senha:
+                conn.close()
+                return False, "Informe a senha para novo usuário!"
+            
+            # Verificar se username já existe
+            c.execute("SELECT id FROM usuarios WHERE username=?", (username,))
+            if c.fetchone():
+                conn.close()
+                return False, f"Login '{username}' já existe! Escolha outro."
+            
+            # Inserir novo usuário
             c.execute("INSERT INTO usuarios(username,nome,nivel,menus_permitidos,password) VALUES(?,?,?,?,?)",
                       (username, nome, nivel, menus_str, hash_pw(senha)))
-        conn.commit(); conn.close(); return True, "Usuário salvo!"
-    except sqlite3.IntegrityError:
-        conn.close(); return False, "Login já existe!"
+        
+        conn.commit()
+        conn.close()
+        return True, "Usuário salvo com sucesso!"
+        
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        return False, f"Erro: Login já existe ou dados inválidos. ({str(e)})"
+    except Exception as e:
+        conn.close()
+        return False, f"Erro ao salvar usuário: {str(e)}"
 
 def excluir_usuario(uid):
     conn = get_conn(); c = conn.cursor()
@@ -881,16 +908,25 @@ elif pag == "👤 Usuários":
                     menus_sel.append(menu)
 
             if st.form_submit_button("💾 Salvar Usuário", use_container_width=True):
-                if u_username and u_nome and u_senha:
+                if not u_username:
+                    st.error("⚠️ Digite um login para o usuário!")
+                elif not u_nome:
+                    st.error("⚠️ Digite o nome completo do usuário!")
+                elif not u_senha:
+                    st.error("⚠️ Digite uma senha para o usuário!")
+                elif len(u_senha) < 4:
+                    st.error("⚠️ A senha deve ter pelo menos 4 caracteres!")
+                else:
+                    # Tudo preenchido, tentar salvar
                     ok, msg = salvar_usuario(u_username, u_nome, u_nivel, menus_sel, senha=u_senha)
                     if ok:
                         st.success(f"✅ {msg}")
+                        st.balloons()
                         st.session_state.form_user_key += 1  # Incrementa para resetar form
                         st.rerun()
                     else:
                         st.error(f"❌ {msg}")
-                else:
-                    st.error("⚠️ Login, Nome e Senha são obrigatórios!")
+                        st.warning("💡 Se o problema persistir, verifique se o login já existe.")
 
     with tab2:
         st.subheader("Usuários Cadastrados")
@@ -945,26 +981,39 @@ elif pag == "⚙️ Configurações":
     chave_atual = get_config('chave_pix', '19995056708')
     
     with st.form("form_pix"):
-        st.info("Esta chave PIX será exibida no QR Code dos orçamentos em PDF")
+        st.info("📱 Esta chave PIX será exibida no QR Code dos orçamentos em PDF")
+        
+        st.markdown("""
+        **📌 Formatos aceitos de Chave PIX:**
+        - **Telefone:** Digite só os números (ex: `19995056708` ou `5519995056708`)
+        - **E-mail:** Digite completo (ex: `oficina@email.com`)
+        - **CPF/CNPJ:** Digite só os números (ex: `12345678900`)
+        - **Chave Aleatória:** Cole a chave completa
+        
+        ⚠️ **IMPORTANTE para Telefone:** 
+        - Se seu telefone tem DDD 19 e número 99505-6708
+        - Digite: `19995056708` (sem espaços, parênteses ou traços)
+        - O sistema adiciona automaticamente o +55 no QR Code
+        """)
         
         nova_chave = st.text_input(
-            "Chave PIX (Telefone, E-mail, CPF/CNPJ ou Chave Aleatória)",
+            "Chave PIX",
             value=chave_atual,
-            placeholder="Ex: 19995056708"
+            placeholder="Ex: 19995056708 (telefone) ou email@dominio.com"
         )
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.caption("💡 Essa chave será incluída no QR Code para facilitar o pagamento dos clientes")
+            st.caption("💡 O QR Code será gerado automaticamente no padrão correto para cada tipo de chave")
         with col2:
             if st.form_submit_button("💾 Salvar Configuração", use_container_width=True):
-                if nova_chave:
+                if nova_chave and len(nova_chave) >= 8:
                     set_config('chave_pix', nova_chave)
                     st.success("✅ Chave PIX atualizada com sucesso!")
                     st.balloons()
                     st.rerun()
                 else:
-                    st.error("⚠️ Informe uma chave PIX válida!")
+                    st.error("⚠️ Informe uma chave PIX válida (mínimo 8 caracteres)!")
     
     st.markdown("---")
     st.subheader("ℹ️ Informações do Sistema")
